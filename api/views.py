@@ -6,10 +6,11 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from rest_framework import status
 import json
-from .utils.dowell_hash import *
+# from .utils.dowell_hash import dowell_hash
 from .utils.event_function import create_event
 from .utils.datacube import *
 from .utils.dowellconnection import *
+from .utils import dowell_hash
 import datacube
 from .models import RandomSession
 
@@ -215,3 +216,74 @@ def register(request):
         'inserted_id':f"{inserted_id}"
         })
 
+
+
+@api_view(['POST'])
+def forgot_password(request):
+
+    username = request.data.get('username', None)
+    email = request.data.get('email', None)
+    otp_input = request.data.get('otp', None)
+    new_password = request.data.get('new_password', None)
+    confirm_password = request.data.get('confirm_password', None)
+    
+    if new_password != confirm_password:
+        return Response({'msg':'error','info': 'Passwords not matching'},status=status.HTTP_400_BAD_REQUEST)
+
+    data_all_passwords={
+        "api_key": "82a7d2ed-c24d-4b55-9a3a-83d6273809d9",
+        "operation": "insert",
+        "db_name": "login_test",
+        "coll_name": "all_passwords",
+        "data": {                   
+            "Username": username,"Email":email,"date":datetime.datetime.now().strftime('%d %b %Y %H:%M:%S'),"Password":dowell_hash.dowell_hash(new_password)
+        },
+        "payment":False
+    }
+    
+    # Datacube user_list config 
+    data = {
+        "api_key": "82a7d2ed-c24d-4b55-9a3a-83d6273809d9",
+        "db_name": "login_test",
+        "collection_name": 'username_list',
+        "filters": {                   
+            "Email": email, 'Username': username
+        },
+        "payment":False
+    }
+    # Datacube email_otp config
+    email_data = {
+        "api_key": "82a7d2ed-c24d-4b55-9a3a-83d6273809d9",
+        "db_name": "login_test",
+        "collection_name": "email_otp",
+        "filters": {                   
+            "email": email, 'otp': otp_input 
+        },
+        "payment":False
+    }
+
+    def update_user(update_data,coll_name):
+        update_config = data.copy()
+        update_config.pop('filters')
+        update_config.pop('payment')
+        update_config["collection_name"]=coll_name
+        update_config['query'] = {'Email': email, 'Username': username }
+        update_config['update_data'] = update_data 
+        return datacube.datacube_data_update(**update_config)
+
+
+    guest_query = datacube.datacube_data_retrieval(**email_data)
+    guest_list = json.loads(guest_query)
+    if len(guest_list["data"]) > 0:
+        acct_query = datacube.datacube_data_retrieval(**data)
+        acct_list = json.loads(acct_query)
+        if len(acct_list["data"]) > 0:
+            update_fields = {
+                'Password': dowell_hash.dowell_hash(new_password)}
+            update_user(update_fields,f'{acct_list["data"][0]["Country"]}_{username[0].upper()}')
+            requests.post(url="https://datacube.uxlivinglab.online/db_api/crud/",json=data_all_passwords)
+            return Response({'msg':'success','info':'Password reset successfully'})
+        else:
+            return Response({'msg':'error','info': 'User not found'},status=status.HTTP_400_BAD_REQUEST)
+    else:
+        return Response({'msg':'error','info': 'Wrong OTP'},status=status.HTTP_400_BAD_REQUEST)
